@@ -96,6 +96,16 @@ int opcode(int instruction)
     return (instruction >> 22);
 }
 
+int convertNum(int num)
+{
+    /* convert a 16-bit number into a 32-bit Linux integer */
+    if (num & (1 << 15))
+    {
+        num -= (1 << 16);
+    }
+    return (num);
+}
+
 void printInstruction(int instr)
 {
 
@@ -208,12 +218,13 @@ int run(stateType state)
 
         /* --------------------- ID stage --------------------- */
         newState.IDEX.pcPlus1 = state.IFID.pcPlus1;
-        newState.IDEX.instr = opcode(state.IFID.instr);
-        newState.IDEX.readRegA = field0(state.IFID.instr);
-        newState.IDEX.readRegB = field1(state.IFID.instr);
-        newState.IDEX.offset = field2(state.IFID.instr);
+        newState.IDEX.instr = state.IFID.instr;
+        newState.IDEX.readRegA = state.reg[field0(state.IFID.instr)];
+        newState.IDEX.readRegB = state.reg[field1(state.IFID.instr)];
+        newState.IDEX.offset = convertNum(field2(state.IFID.instr));
 
         /* --------------------- EX stage --------------------- */
+         // ! Data/control hazard portion needed
         newState.EXMEM.instr = state.IDEX.instr;
 
         int src1 = state.IDEX.readRegA;
@@ -222,58 +233,84 @@ int run(stateType state)
 
         if (opcode(newState.EXMEM.instr) == ADD)
         {
-            newState.EXMEM.aluResult = state.dataMem[src1] + state.dataMem[src2];
+            newState.EXMEM.aluResult = src1 + src2;
         }
         else if (opcode(newState.EXMEM.instr) == NOR)
         {
-            newState.EXMEM.aluResult = ~(state.dataMem[src1] | state.dataMem[src2]);
+            newState.EXMEM.aluResult = ~(src1 | src2);
         }
         else if (opcode(newState.EXMEM.instr) == LW)
         {
-            newState.EXMEM.aluResult = state.dataMem[src1] + offset;
+            newState.EXMEM.aluResult = src1 + offset;
         }
         else if (opcode(newState.EXMEM.instr == SW))
         {
-            newState.EXMEM.aluResult = state.dataMem[src1] + offset;
+            newState.EXMEM.aluResult = src1 + offset;
         }
         else if (opcode(newState.EXMEM.instr) == BEQ)
         {
+            newState.EXMEM.branchTarget = state.pc + convertNum(offset);
             if (state.dataMem[src1] == state.dataMem[src2])
-                newState.EXMEM.branchTarget = field2(state.IDEX.offset);
+            {
+                newState.EXMEM.aluResult = 1;
+            }
+            else
+            {
+                newState.EXMEM.aluResult = 0;
+            }
         }
         else
         {
         }
 
+        newState.EXMEM.readRegB = src2;
+
         /* --------------------- MEM stage --------------------- */
+        // ! Data/control hazard portion needed
         newState.MEMWB.instr = state.EXMEM.instr;
 
-        if (opcode(newState.MEMWB.instr) == ADD || opcode(newState.MEMWB.instr) == NOR)
+        if (opcode(state.EXMEM.instr) == ADD || opcode(state.EXMEM.instr) == NOR)
         {
             newState.MEMWB.writeData = state.EXMEM.aluResult;
         }
-        else if (opcode(newState.MEMWB.instr) == LW || opcode(newState.MEMWB.instr) == SW)
+        else if (opcode(state.EXMEM.instr) == LW)
         {
             newState.MEMWB.writeData = state.dataMem[state.EXMEM.aluResult];
         }
-        // ? What should I do?????
-        else if (opcode(newState.MEMWB.instr) == BEQ)
+        else if (opcode(state.EXMEM.instr) == SW)
         {
-
+            newState.dataMem[state.EXMEM.aluResult] = state.dataMem[state.EXMEM.aluResult];
+        }
+        else if (opcode(state.EXMEM.instr) == BEQ)
+        {
+            if (state.EXMEM.aluResult == 1)
+            {
+                newState.IFID.instr = NOOPINSTRUCTION;
+                newState.IDEX.instr = NOOPINSTRUCTION;
+                newState.EXMEM.instr = NOOPINSTRUCTION;
+                newState.pc = state.EXMEM.branchTarget;
+            }
+            else
+            {
+            }
         }
 
         /* --------------------- WB stage --------------------- */
         newState.WBEND.instr = state.MEMWB.instr;
         newState.WBEND.writeData = state.MEMWB.writeData;
-        
+
         if (opcode(newState.MEMWB.instr) == ADD || opcode(newState.MEMWB.instr) == NOR)
         {
-            
+            int dst = field2(state.MEMWB.instr);
+            newState.reg[dst] = state.MEMWB.writeData;
         }
-        else if (opcode(newState.MEMWB.instr) == LW || opcode(newState.MEMWB.instr) == SW)
+        else if (opcode(state.MEMWB.instr) == LW)
         {
-            newState.MEMWB.writeData = state.dataMem[state.EXMEM.aluResult];
+            int dst = field1(state.MEMWB.instr);
+            newState.reg[dst] = state.MEMWB.writeData;
         }
+
+        newState.pc++;
 
         state = newState; /* this is the last statement before end of the loop.
         It marks the end of the cycle and updates the
