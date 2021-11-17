@@ -39,6 +39,10 @@ typedef struct IDEXStruct
     int readRegA;
     int readRegB;
     int offset;
+    int hazard_loc1;
+    int hazard_reg1;
+    int hazard_loc2;
+    int hazard_reg2;
 } IDEXType;
 
 typedef struct EXMEMStruct
@@ -74,6 +78,7 @@ typedef struct stateStruct
     MEMWBType MEMWB;
     WBENDType WBEND;
     int cycles; /* number of cycles run so far */
+    int buffer[3];
 } stateType;
 
 int field0(int instruction)
@@ -215,42 +220,252 @@ int run(stateType state)
         /* --------------------- IF stage --------------------- */
         newState.IFID.pcPlus1 = state.pc + 1;
         newState.IFID.instr = state.instrMem[state.pc];
+        newState.pc = state.pc + 1;
 
         /* --------------------- ID stage --------------------- */
+
+        newState.IDEX.hazard_loc1 = -1;
+        newState.IDEX.hazard_reg1 = -1;
+        newState.IDEX.hazard_loc2 = -1;
+        newState.IDEX.hazard_reg2 = -1;
+
+        if (opcode(state.IFID.instr) == ADD || opcode(state.IFID.instr) == NOR)
+        {
+            for (size_t i = 0; i < 3; i++)
+            {
+                if (state.buffer[i] == field0(state.IFID.instr))
+                {
+                    newState.IDEX.hazard_loc1 = i + 1;
+                    newState.IDEX.hazard_reg1 = state.buffer[i];
+                    break;
+                }
+            }
+            for (size_t i = 0; i < 3; i++)
+            {
+                if (state.buffer[i] == field1(state.IFID.instr))
+                {
+                    newState.IDEX.hazard_loc2 = i + 1;
+                    newState.IDEX.hazard_reg2 = state.buffer[i];
+                    break;
+                }
+            }
+
+            newState.buffer[2] = state.buffer[1];
+            newState.buffer[1] = state.buffer[0];
+            newState.buffer[0] = field2(state.IFID.instr);
+        }
+        else if (opcode(state.IFID.instr) == LW)
+        {
+            for (size_t i = 0; i < 3; i++)
+            {
+                if (state.buffer[i] == field0(state.IFID.instr))
+                {
+                    newState.IDEX.hazard_loc1 = i + 1;
+                    newState.IDEX.hazard_reg1 = state.buffer[i];
+                    break;
+                }
+            }
+
+            newState.buffer[2] = state.buffer[1];
+            newState.buffer[1] = state.buffer[0];
+            newState.buffer[0] = field1(state.IFID.instr);
+        }
+        else if (opcode(state.IFID.instr) == SW)
+        {
+            for (size_t i = 0; i < 3; i++)
+            {
+                if (state.buffer[i] == field0(state.IFID.instr))
+                {
+                    newState.IDEX.hazard_loc1 = i + 1;
+                    newState.IDEX.hazard_reg1 = state.buffer[i];
+                    break;
+                }
+            }
+            for (size_t i = 0; i < 3; i++)
+            {
+                if (state.buffer[i] == field1(state.IFID.instr))
+                {
+                    newState.IDEX.hazard_loc2 = i + 1;
+                    newState.IDEX.hazard_reg2 = state.buffer[i];
+                    break;
+                }
+            }
+
+            newState.buffer[2] = state.buffer[1];
+            newState.buffer[1] = state.buffer[0];
+            newState.buffer[0] = -1;
+        }
+        else if (opcode(state.IFID.instr) == BEQ)
+        {
+            for (size_t i = 0; i < 3; i++)
+            {
+                if (state.buffer[i] == field0(state.IFID.instr))
+                {
+                    newState.IDEX.hazard_loc1 = i + 1;
+                    newState.IDEX.hazard_reg1 = state.buffer[i];
+                    break;
+                }
+            }
+            for (size_t i = 0; i < 3; i++)
+            {
+                if (state.buffer[i] == field1(state.IFID.instr))
+                {
+                    newState.IDEX.hazard_loc2 = i + 1;
+                    newState.IDEX.hazard_reg2 = state.buffer[i];
+                    break;
+                }
+            }
+
+            newState.buffer[2] = state.buffer[1];
+            newState.buffer[1] = state.buffer[0];
+            newState.buffer[0] = -1;
+        }
+        else if (opcode(state.IFID.instr) == NOOP)
+        {
+            newState.buffer[2] = state.buffer[1];
+            newState.buffer[1] = state.buffer[0];
+            newState.buffer[0] = -1;
+        }
+
         newState.IDEX.pcPlus1 = state.IFID.pcPlus1;
         newState.IDEX.instr = state.IFID.instr;
         newState.IDEX.readRegA = state.reg[field0(state.IFID.instr)];
         newState.IDEX.readRegB = state.reg[field1(state.IFID.instr)];
         newState.IDEX.offset = convertNum(field2(state.IFID.instr));
 
+        if (opcode(state.IDEX.instr) == LW && (newState.IDEX.hazard_loc1 == 1 || newState.IDEX.hazard_loc2 == 1))
+        {
+            newState.IDEX.instr = NOOPINSTRUCTION;
+            newState.IFID = state.IFID;
+            newState.pc = state.pc;
+
+            newState.IDEX.hazard_loc1 = newState.IDEX.hazard_loc1 == 1 ? newState.IDEX.hazard_loc1 + 1 : newState.IDEX.hazard_loc1;
+            newState.IDEX.hazard_loc2 = newState.IDEX.hazard_loc2 == 1 ? newState.IDEX.hazard_loc2 + 1 : newState.IDEX.hazard_loc2;
+        }
+
         /* --------------------- EX stage --------------------- */
-         // ! Data/control hazard portion needed
+        // ! Data/control hazard portion needed
+
         newState.EXMEM.instr = state.IDEX.instr;
+        newState.EXMEM.readRegB = state.IDEX.readRegB;
 
         int src1 = state.IDEX.readRegA;
         int src2 = state.IDEX.readRegB;
         int offset = state.IDEX.offset;
 
-        if (opcode(newState.EXMEM.instr) == ADD)
+        if (opcode(newState.EXMEM.instr) == ADD || opcode(newState.EXMEM.instr) == NOR)
         {
-            newState.EXMEM.aluResult = src1 + src2;
+            if (state.IDEX.hazard_loc1 == 1)
+            {
+                src1 = field0(newState.EXMEM.instr) == state.IDEX.hazard_reg1 ? state.EXMEM.aluResult : src1;
+            }
+            else if (state.IDEX.hazard_loc1 == 2)
+            {
+
+                src1 = field0(newState.EXMEM.instr) == state.IDEX.hazard_reg1 ? state.MEMWB.writeData : src1;
+            }
+            else if (state.IDEX.hazard_loc1 == 3)
+            {
+
+                src1 = field0(newState.EXMEM.instr) == state.IDEX.hazard_reg1 ? state.WBEND.writeData : src1;
+            }
+
+            if (state.IDEX.hazard_loc2 == 1)
+            {
+                src2 = field1(newState.EXMEM.instr) == state.IDEX.hazard_reg2 ? state.EXMEM.aluResult : src2;
+            }
+            else if (state.IDEX.hazard_loc2 == 2)
+            {
+
+                src2 = field1(newState.EXMEM.instr) == state.IDEX.hazard_reg2 ? state.MEMWB.writeData : src2;
+            }
+            else if (state.IDEX.hazard_loc2 == 3)
+            {
+
+                src2 = field1(newState.EXMEM.instr) == state.IDEX.hazard_reg2 ? state.WBEND.writeData : src2;
+            }
+
+            newState.EXMEM.aluResult = opcode(newState.EXMEM.instr) == ADD ? src1 + src2 : ~(src1 | src2);
         }
-        else if (opcode(newState.EXMEM.instr) == NOR)
-        {
-            newState.EXMEM.aluResult = ~(src1 | src2);
-        }
+
         else if (opcode(newState.EXMEM.instr) == LW)
         {
+
+            if (state.IDEX.hazard_loc1 == 1)
+            {
+                src1 = field0(newState.EXMEM.instr) == state.IDEX.hazard_reg1 ? state.EXMEM.aluResult : src1;
+            }
+            else if (state.IDEX.hazard_loc1 == 2)
+            {
+                src1 = field0(newState.EXMEM.instr) == state.IDEX.hazard_reg1 ? state.MEMWB.writeData : src1;
+            }
+            else if (state.IDEX.hazard_loc1 == 3)
+            {
+                src1 = field0(newState.EXMEM.instr) == state.IDEX.hazard_reg1 ? state.WBEND.writeData : src1;
+            }
+
             newState.EXMEM.aluResult = src1 + offset;
         }
-        else if (opcode(newState.EXMEM.instr == SW))
+        else if (opcode(newState.EXMEM.instr) == SW)
         {
+
+            if (state.IDEX.hazard_loc1 == 1)
+            {
+                src1 = field0(newState.EXMEM.instr) == state.IDEX.hazard_reg1 ? state.EXMEM.aluResult : src1;
+            }
+            else if (state.IDEX.hazard_loc1 == 2)
+            {
+                src1 = field0(newState.EXMEM.instr) == state.IDEX.hazard_reg1 ? state.MEMWB.writeData : src1;
+            }
+            else if (state.IDEX.hazard_loc1 == 3)
+            {
+                src1 = field0(newState.EXMEM.instr) == state.IDEX.hazard_reg1 ? state.WBEND.writeData : src1;
+            }
+
+            if (state.IDEX.hazard_loc2 == 1)
+            {
+                newState.EXMEM.readRegB = field1(newState.EXMEM.instr) == state.IDEX.hazard_reg2 ? state.EXMEM.aluResult : src2;
+            }
+            else if (state.IDEX.hazard_loc2 == 2)
+            {
+                newState.EXMEM.readRegB = field1(newState.EXMEM.instr) == state.IDEX.hazard_reg2 ? state.MEMWB.writeData : src2;
+            }
+            else if (state.IDEX.hazard_loc2 == 3)
+            {
+                newState.EXMEM.readRegB = field1(newState.EXMEM.instr) == state.IDEX.hazard_reg2 ? state.WBEND.writeData : src2;
+            }
+
             newState.EXMEM.aluResult = src1 + offset;
         }
         else if (opcode(newState.EXMEM.instr) == BEQ)
         {
-            newState.EXMEM.branchTarget = state.pc + convertNum(offset);
-            if (state.dataMem[src1] == state.dataMem[src2])
+            if (state.IDEX.hazard_loc1 == 1)
+            {
+                src1 = field0(newState.EXMEM.instr) == state.IDEX.hazard_reg1 ? state.EXMEM.aluResult : src1;
+            }
+            else if (state.IDEX.hazard_loc1 == 2)
+            {
+                src1 = field0(newState.EXMEM.instr) == state.IDEX.hazard_reg1 ? state.MEMWB.writeData : src1;
+            }
+            else if (state.IDEX.hazard_loc1 == 3)
+            {
+                src1 = field0(newState.EXMEM.instr) == state.IDEX.hazard_reg1 ? state.WBEND.writeData : src1;
+            }
+
+            if (state.IDEX.hazard_loc2 == 1)
+            {
+                src2 = field1(newState.EXMEM.instr) == state.IDEX.hazard_reg2 ? state.EXMEM.aluResult : src2;
+            }
+            else if (state.IDEX.hazard_loc2 == 2)
+            {
+                src2 = field1(newState.EXMEM.instr) == state.IDEX.hazard_reg2 ? state.MEMWB.writeData : src2;
+            }
+            else if (state.IDEX.hazard_loc2 == 3)
+            {
+                src2 = field1(newState.EXMEM.instr) == state.IDEX.hazard_reg2 ? state.WBEND.writeData : src2;
+            }
+
+            if (src1 == src2)
             {
                 newState.EXMEM.aluResult = 1;
             }
@@ -258,16 +473,15 @@ int run(stateType state)
             {
                 newState.EXMEM.aluResult = 0;
             }
+
+            newState.EXMEM.branchTarget = state.IDEX.pcPlus1 + offset;
         }
         else
         {
         }
 
-        newState.EXMEM.readRegB = src2;
-
         /* --------------------- MEM stage --------------------- */
         // ! Data/control hazard portion needed
-        newState.MEMWB.instr = state.EXMEM.instr;
 
         if (opcode(state.EXMEM.instr) == ADD || opcode(state.EXMEM.instr) == NOR)
         {
@@ -279,7 +493,7 @@ int run(stateType state)
         }
         else if (opcode(state.EXMEM.instr) == SW)
         {
-            newState.dataMem[state.EXMEM.aluResult] = state.dataMem[state.EXMEM.aluResult];
+            newState.dataMem[state.EXMEM.aluResult] = state.EXMEM.readRegB;
         }
         else if (opcode(state.EXMEM.instr) == BEQ)
         {
@@ -288,18 +502,29 @@ int run(stateType state)
                 newState.IFID.instr = NOOPINSTRUCTION;
                 newState.IDEX.instr = NOOPINSTRUCTION;
                 newState.EXMEM.instr = NOOPINSTRUCTION;
+
+                newState.buffer[0] = -1;
+                newState.buffer[1] = -1;
+                newState.buffer[2] = -1;
+
+                newState.IDEX.hazard_loc1 = -1;
+                newState.IDEX.hazard_loc2 = -1;
+                newState.IDEX.hazard_reg1 = -1;
+                newState.IDEX.hazard_reg2 = -1;
+
                 newState.pc = state.EXMEM.branchTarget;
             }
-            else
-            {
-            }
+            // else
+            // {
+            //     newState.pc = state.pc + 1;
+            // }
         }
 
-        /* --------------------- WB stage --------------------- */
-        newState.WBEND.instr = state.MEMWB.instr;
-        newState.WBEND.writeData = state.MEMWB.writeData;
+        newState.MEMWB.instr = state.EXMEM.instr;
 
-        if (opcode(newState.MEMWB.instr) == ADD || opcode(newState.MEMWB.instr) == NOR)
+        /* --------------------- WB stage --------------------- */
+
+        if (opcode(state.MEMWB.instr) == ADD || opcode(state.MEMWB.instr) == NOR)
         {
             int dst = field2(state.MEMWB.instr);
             newState.reg[dst] = state.MEMWB.writeData;
@@ -310,7 +535,8 @@ int run(stateType state)
             newState.reg[dst] = state.MEMWB.writeData;
         }
 
-        newState.pc++;
+        newState.WBEND.instr = state.MEMWB.instr;
+        newState.WBEND.writeData = state.MEMWB.writeData;
 
         state = newState; /* this is the last statement before end of the loop.
         It marks the end of the cycle and updates the
@@ -360,6 +586,9 @@ int main(int argc, char *argv[])
 
     state.pc = 0;
     state.cycles = 0;
+    state.buffer[0] = -1;
+    state.buffer[1] = -1;
+    state.buffer[2] = -1;
 
     for (size_t r = 0; r < NUMREGS; r++)
     {
@@ -367,10 +596,28 @@ int main(int argc, char *argv[])
     }
 
     state.IFID.instr = NOOPINSTRUCTION;
+    state.IFID.pcPlus1 = 0;
+
     state.IDEX.instr = NOOPINSTRUCTION;
+    state.IDEX.pcPlus1 = 0;
+    state.IDEX.readRegA = 0;
+    state.IDEX.readRegB = 0;
+    state.IDEX.offset = 0;
+    state.IDEX.hazard_loc1 = -1;
+    state.IDEX.hazard_loc2 = -1;
+    state.IDEX.hazard_reg1 = -1;
+    state.IDEX.hazard_reg2 = -1;
+
     state.EXMEM.instr = NOOPINSTRUCTION;
+    state.EXMEM.aluResult = 0;
+    state.EXMEM.branchTarget = 0;
+    state.EXMEM.readRegB = 0;
+
     state.MEMWB.instr = NOOPINSTRUCTION;
+    state.MEMWB.writeData = 0;
+
     state.WBEND.instr = NOOPINSTRUCTION;
+    state.WBEND.writeData = 0;
 
     run(state);
 
